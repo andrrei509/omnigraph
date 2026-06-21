@@ -25,6 +25,15 @@ public final class JavaSpectralAnalyzer implements SpectralAnalyzer {
         return mag;
     }
 
+    @Override
+    public void forwardTransform(double[] re, double[] im) {
+        int n = re.length;
+        if (n == 0 || (n & (n - 1)) != 0 || im.length != n) {
+            throw new IllegalArgumentException("re/im must be equal power-of-two length");
+        }
+        fft(re, im);
+    }
+
     private static void fft(double[] re, double[] im) {
         int n = re.length;
         for (int i = 1, j = 0; i < n; i++) {

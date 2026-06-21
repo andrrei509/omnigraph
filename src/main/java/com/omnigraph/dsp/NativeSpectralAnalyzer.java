@@ -28,6 +28,8 @@ public final class NativeSpectralAnalyzer implements SpectralAnalyzer {
 
     private static native void magnitudeSpectrum(double[] input, double[] output);
 
+    private static native void complexForward(double[] re, double[] im);
+
     @Override
     public double[] magnitude(double[] samples) {
         int n = samples.length;
@@ -37,6 +39,15 @@ public final class NativeSpectralAnalyzer implements SpectralAnalyzer {
         double[] out = new double[n / 2];
         magnitudeSpectrum(samples, out);
         return out;
+    }
+
+    @Override
+    public void forwardTransform(double[] re, double[] im) {
+        int n = re.length;
+        if (n == 0 || (n & (n - 1)) != 0 || im.length != n) {
+            throw new IllegalArgumentException("re/im must be equal power-of-two length");
+        }
+        complexForward(re, im);
     }
 
     @Override

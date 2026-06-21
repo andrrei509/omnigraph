@@ -14,6 +14,27 @@ synchronized, live-updating views you can retune — and hear — as it runs.
   shown as bars, with the theoretical harmonic weights overlaid as reference
   lines — a real time/frequency-domain cross-check, not a replay of the inputs.
 
+The dashboard has two tabs: the **Harmonic Lab** (the four views above) and the
+**Path Studio** (arbitrary-path Fourier decomposition, below).
+
+## Path Studio — draw or type anything, watch Fourier redraw it
+
+The Path Studio closes the loop from *synthesis* to *analysis* on arbitrary
+input:
+
+- **Type a function** `f(x)` (e.g. `sin(3*x) + 0.5*cos(5*x)`) — a self-contained
+  recursive-descent parser compiles it, the graph is sampled into a complex
+  path, and a **complex DFT** decomposes it into rotating vectors.
+- **Or draw freehand** with the mouse — the stroke is resampled and decomposed
+  the same way.
+- A chain of **epicycles** (rotating circles) then retraces your path in real
+  time, leaving a glowing trail, with the target overlaid for comparison.
+- A **truncation slider** lets you watch convergence — a handful of epicycles
+  gives a rough shape; adding more sharpens it toward the original.
+
+The complex DFT runs through the same `SpectralAnalyzer` abstraction, so the
+**native FFT kernel powers the epicycle decomposition** when present.
+
 ## Live laboratory
 
 Everything below retunes the running simulation in real time — no restart:
@@ -114,7 +135,7 @@ Requires JDK 21+ and Maven.
 
 ```bash
 make -C native              # (optional) build the native FFT kernel
-mvn test                    # 12 unit tests: waveform math, FFT, SQL rules
+mvn test                    # 20 unit tests: waveform math, FFT, DFT/epicycles, parser, SQL rules
 mvn javafx:run              # launch the dashboard
 ```
 
@@ -136,14 +157,19 @@ src/main/java/com/omnigraph
 ├── model
 │   ├── WaveformType.java           Sine/Square/Sawtooth/Triangle Fourier series
 │   ├── Spectrum.java               harmonic numbers + signed weights
+│   ├── Epicycle.java               one rotating vector (freq, amplitude, phase)
 │   └── HarmonicSnapshot.java       immutable per-frame payload
 ├── audio
 │   └── AudioEngine.java            real-time additive PCM synthesis thread
 ├── dsp
-│   ├── SpectralAnalyzer.java       FFT backend contract
+│   ├── SpectralAnalyzer.java       FFT backend contract (magnitude + complex)
 │   ├── JavaSpectralAnalyzer.java   pure-Java radix-2 FFT (fallback)
 │   ├── NativeSpectralAnalyzer.java JNI binding to the C kernel
-│   └── SpectralAnalyzers.java      backend selector (native, else java)
+│   ├── SpectralAnalyzers.java      backend selector (native, else java)
+│   └── FourierPath.java            complex-path decomposition into epicycles
+├── expr
+│   ├── FunctionParser.java         recursive-descent f(x) compiler
+│   └── ExpressionException.java    parse-error type
 ├── persistence
 │   ├── SimulationRecord.java       typed saved-state value object
 │   └── DatabaseLogger.java         safe raw-SQL payload generator + script export

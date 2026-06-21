@@ -90,3 +90,23 @@ Java_com_omnigraph_dsp_NativeSpectralAnalyzer_magnitudeSpectrum(JNIEnv *env,
     free(im);
     free(mag);
 }
+
+JNIEXPORT void JNICALL
+Java_com_omnigraph_dsp_NativeSpectralAnalyzer_complexForward(JNIEnv *env,
+                                                             jclass cls,
+                                                             jdoubleArray re,
+                                                             jdoubleArray im) {
+    (void) cls;
+    jsize n = (*env)->GetArrayLength(env, re);
+    if (n <= 0) {
+        return;
+    }
+    jdouble *r = (*env)->GetDoubleArrayElements(env, re, NULL);
+    jdouble *i = (*env)->GetDoubleArrayElements(env, im, NULL);
+
+    fft(r, i, n);
+
+    /* mode 0 commits the in-place changes back to the Java arrays */
+    (*env)->ReleaseDoubleArrayElements(env, re, r, 0);
+    (*env)->ReleaseDoubleArrayElements(env, im, i, 0);
+}

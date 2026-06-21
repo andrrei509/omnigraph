@@ -7,8 +7,12 @@ import com.omnigraph.core.RenderBridge;
 import com.omnigraph.core.SimulationConstants;
 import com.omnigraph.core.SimulationObserver;
 import com.omnigraph.core.SimulationState;
+import com.omnigraph.dsp.FourierPath;
 import com.omnigraph.dsp.SpectralAnalyzer;
 import com.omnigraph.dsp.SpectralAnalyzers;
+import com.omnigraph.expr.ExpressionException;
+import com.omnigraph.expr.FunctionParser;
+import com.omnigraph.model.Epicycle;
 import com.omnigraph.model.HarmonicSnapshot;
 import com.omnigraph.model.WaveformType;
 import com.omnigraph.persistence.DatabaseLogger;
@@ -40,6 +44,8 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.Separator;
 import javafx.scene.control.Slider;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.image.WritableImage;
@@ -47,7 +53,9 @@ import javafx.scene.layout.Background;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
+import java.util.function.DoubleUnaryOperator;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
@@ -82,10 +90,15 @@ public final class OmniGraphDashboard extends Application implements SimulationO
     private final EngineParameters params = EngineParameters.fromDefaults(constants);
     private final DatabaseLogger databaseLogger = new DatabaseLogger();
 
+    private static final int PATH_SAMPLES = 512;
+    private static final double PATH_DT = 0.002;
+    private static final Color EPI_CIRCLE = Color.web("#2f3550");
+
     private SimulationState state;
     private RenderBridge bridge;
     private MathCoreEngine engine;
     private AudioEngine audio;
+    private SpectralAnalyzer analyzer;
     private String analyzerBackend = "java";
 
     private Canvas circleCanvas;
@@ -97,31 +110,46 @@ public final class OmniGraphDashboard extends Application implements SimulationO
     private final Deque<Double> fourierHistory = new ArrayDeque<>();
     private volatile HarmonicSnapshot latest;
 
-    private BorderPane root;
+    private Region root;
     private TextField labelField;
     private Label statusLabel;
     private TextArea sqlConsole;
     private Button playPauseButton;
     private Button audioButton;
 
+    // ---- Path Studio state --------------------------------------------------
+    private Canvas studioDrawCanvas;
+    private Canvas studioAnimCanvas;
+    private TextField functionField;
+    private Slider epicycleSlider;
+    private Label epicycleCountLabel;
+    private Label studioStatus;
+
+    private final java.util.List<double[]> drawnPoints = new java.util.ArrayList<>();
+    private volatile java.util.List<com.omnigraph.model.Epicycle> epicycles = java.util.List.of();
+    private double[][] targetPath;
+    private double pathScale = 1.0;
+    private double animT = 0.0;
+    private final Deque<double[]> trail = new ArrayDeque<>();
+
     @Override
     public void start(Stage stage) {
-        SpectralAnalyzer analyzer = SpectralAnalyzers.best();
+        this.analyzer = SpectralAnalyzers.best();
         this.analyzerBackend = analyzer.backend();
         this.state = new SimulationState();
         this.bridge = new RenderBridge(state);
         this.engine = new MathCoreEngine(constants, params, state, analyzer);
         this.audio = new AudioEngine(params);
 
-        root = new BorderPane();
-        root.setBackground(Background.fill(BG));
-        root.setTop(buildHeader());
-        root.setCenter(buildCanvasGrid());
-        root.setRight(buildControlPanel());
-        root.setBottom(buildFooter());
+        TabPane tabs = new TabPane();
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        tabs.getTabs().add(new Tab("Harmonic Lab", buildHarmonicLab()));
+        tabs.getTabs().add(new Tab("Path Studio", buildPathStudio()));
+        tabs.setBackground(Background.fill(BG));
+        root = tabs;
 
-        Scene scene = new Scene(root, 1340, 1000, BG);
-        stage.setTitle("OmniGraph — Interconnected Harmonic Laboratory");
+        Scene scene = new Scene(tabs, 1360, 1010, BG);
+        stage.setTitle("OmniGraph — Interconnected Mathematical Laboratory");
         stage.setScene(scene);
         stage.setOnCloseRequest(e -> shutdownPipeline());
         stage.show();
@@ -132,6 +160,17 @@ public final class OmniGraphDashboard extends Application implements SimulationO
         audio.start();
 
         startRenderLoop();
+        startPathLoop();
+    }
+
+    private BorderPane buildHarmonicLab() {
+        BorderPane lab = new BorderPane();
+        lab.setBackground(Background.fill(BG));
+        lab.setTop(buildHeader());
+        lab.setCenter(buildCanvasGrid());
+        lab.setRight(buildControlPanel());
+        lab.setBottom(buildFooter());
+        return lab;
     }
 
     // ---- Layout -------------------------------------------------------------
@@ -605,6 +644,288 @@ public final class OmniGraphDashboard extends Application implements SimulationO
     private void clear(GraphicsContext g, double w, double h) {
         g.setFill(CANVAS_BG);
         g.fillRect(0, 0, w, h);
+    }
+
+    // ---- Path Studio --------------------------------------------------------
+
+    private BorderPane buildPathStudio() {
+        Label title = new Label("Path Studio — draw a shape or type a function; epicycles redraw it");
+        title.setFont(Font.font("System", FontWeight.BOLD, 18));
+        title.setTextFill(TEXT);
+        Label sub = new Label("A complex DFT (FFT backend: " + analyzerBackend
+                + ") turns any closed path into a chain of rotating vectors.");
+        sub.setTextFill(MUTED);
+        VBox header = new VBox(2, title, sub);
+        header.setPadding(new Insets(14, 20, 8, 20));
+
+        studioDrawCanvas = new Canvas(440, 440);
+        clearStudioDrawCanvas();
+        studioDrawCanvas.setOnMousePressed(e -> {
+            drawnPoints.clear();
+            drawnPoints.add(new double[] {e.getX(), e.getY()});
+            clearStudioDrawCanvas();
+        });
+        studioDrawCanvas.setOnMouseDragged(e -> {
+            drawnPoints.add(new double[] {e.getX(), e.getY()});
+            renderDrawnStroke();
+        });
+
+        studioAnimCanvas = new Canvas(620, 440);
+
+        functionField = new TextField("sin(3*x) + 0.5*cos(5*x)");
+        functionField.setPromptText("f(x), e.g. sin(x)+0.3*cos(3*x)");
+
+        Button plotButton = new Button("Plot f(x)");
+        plotButton.setMaxWidth(Double.MAX_VALUE);
+        plotButton.setOnAction(e -> plotFunction());
+
+        Button useDrawingButton = new Button("Decompose Drawing");
+        useDrawingButton.setMaxWidth(Double.MAX_VALUE);
+        useDrawingButton.setOnAction(e -> decomposeDrawing());
+
+        Button clearButton = new Button("Clear Drawing");
+        clearButton.setMaxWidth(Double.MAX_VALUE);
+        clearButton.setOnAction(e -> {
+            drawnPoints.clear();
+            clearStudioDrawCanvas();
+        });
+
+        epicycleSlider = new Slider(1, 60, 60);
+        epicycleSlider.setMaxWidth(Double.MAX_VALUE);
+        epicycleCountLabel = new Label("Epicycles: 60");
+        epicycleCountLabel.setTextFill(TEXT);
+        epicycleSlider.valueProperty().addListener((o, ov, nv) ->
+                epicycleCountLabel.setText("Epicycles: " + (int) nv.doubleValue()
+                        + " / " + (int) epicycleSlider.getMax()));
+
+        studioStatus = new Label("Type a function and press Plot, or draw on the left canvas.");
+        studioStatus.setTextFill(MUTED);
+        studioStatus.setWrapText(true);
+
+        Label fnLabel = new Label("Function f(x)   (domain -π .. π)");
+        fnLabel.setTextFill(MUTED);
+        Label drawHint = new Label("Or draw freehand on the left, then:");
+        drawHint.setTextFill(MUTED);
+        Label countHint = new Label("Truncate the series:");
+        countHint.setTextFill(MUTED);
+
+        VBox controls = new VBox(10,
+                fnLabel, functionField, plotButton,
+                new Separator(),
+                drawHint, useDrawingButton, clearButton,
+                new Separator(),
+                countHint, epicycleCountLabel, epicycleSlider,
+                new Separator(),
+                studioStatus);
+        controls.setPadding(new Insets(16, 16, 16, 16));
+        controls.setBackground(Background.fill(PANEL));
+        controls.setPrefWidth(280);
+
+        HBox canvases = new HBox(16,
+                panel("Input — draw a closed shape", studioDrawCanvas),
+                panel("Output — epicycles retrace the path", studioAnimCanvas));
+        canvases.setPadding(new Insets(8, 16, 8, 20));
+
+        BorderPane studio = new BorderPane();
+        studio.setBackground(Background.fill(BG));
+        studio.setTop(header);
+        studio.setCenter(canvases);
+        studio.setRight(controls);
+
+        plotFunction();
+        return studio;
+    }
+
+    private void clearStudioDrawCanvas() {
+        GraphicsContext g = studioDrawCanvas.getGraphicsContext2D();
+        double w = studioDrawCanvas.getWidth();
+        double h = studioDrawCanvas.getHeight();
+        clear(g, w, h);
+        g.setStroke(AXIS);
+        g.setLineWidth(1);
+        g.strokeLine(0, h / 2, w, h / 2);
+        g.strokeLine(w / 2, 0, w / 2, h);
+    }
+
+    private void renderDrawnStroke() {
+        if (drawnPoints.size() < 2) {
+            return;
+        }
+        GraphicsContext g = studioDrawCanvas.getGraphicsContext2D();
+        double[] p0 = drawnPoints.get(drawnPoints.size() - 2);
+        double[] p1 = drawnPoints.get(drawnPoints.size() - 1);
+        g.setStroke(MAGENTA);
+        g.setLineWidth(2);
+        g.strokeLine(p0[0], p0[1], p1[0], p1[1]);
+    }
+
+    private void plotFunction() {
+        try {
+            DoubleUnaryOperator f = FunctionParser.parse(functionField.getText());
+            double[][] path = FourierPath.fromFunction(f, -Math.PI, Math.PI, PATH_SAMPLES);
+            setupPath(path, "f(x) = " + functionField.getText().trim());
+            previewPathOnDrawCanvas(path);
+        } catch (ExpressionException ex) {
+            studioStatus.setText("Parse error: " + ex.getMessage());
+        }
+    }
+
+    private void decomposeDrawing() {
+        if (drawnPoints.size() < 2) {
+            studioStatus.setText("Draw a shape on the left canvas first.");
+            return;
+        }
+        double w = studioDrawCanvas.getWidth();
+        double h = studioDrawCanvas.getHeight();
+        java.util.List<double[]> mathPts = new java.util.ArrayList<>(drawnPoints.size());
+        for (double[] p : drawnPoints) {
+            mathPts.add(new double[] {p[0] - w / 2, h / 2 - p[1]});
+        }
+        double[][] path = FourierPath.fromPoints(mathPts, PATH_SAMPLES);
+        setupPath(path, "freehand drawing (" + drawnPoints.size() + " points)");
+    }
+
+    private void setupPath(double[][] path, String description) {
+        this.targetPath = path;
+        this.epicycles = FourierPath.decompose(path[0], path[1], analyzer);
+
+        double maxAbs = 1e-9;
+        for (int j = 0; j < path[0].length; j++) {
+            maxAbs = Math.max(maxAbs, Math.max(Math.abs(path[0][j]), Math.abs(path[1][j])));
+        }
+        double half = Math.min(studioAnimCanvas.getWidth(), studioAnimCanvas.getHeight()) / 2.0 - 30;
+        this.pathScale = half / maxAbs;
+
+        this.animT = 0.0;
+        this.trail.clear();
+
+        int max = epicycles.size();
+        int def = Math.min(max, 60);
+        epicycleSlider.setMax(max);
+        epicycleSlider.setValue(def);
+        epicycleCountLabel.setText("Epicycles: " + def + " / " + max);
+        studioStatus.setText("Decomposed " + description + " into " + max
+                + " epicycles via FFT (" + analyzerBackend + ").");
+    }
+
+    private void previewPathOnDrawCanvas(double[][] path) {
+        clearStudioDrawCanvas();
+        GraphicsContext g = studioDrawCanvas.getGraphicsContext2D();
+        double w = studioDrawCanvas.getWidth();
+        double h = studioDrawCanvas.getHeight();
+        double cx = w / 2;
+        double cy = h / 2;
+
+        double maxAbs = 1e-9;
+        for (int j = 0; j < path[0].length; j++) {
+            maxAbs = Math.max(maxAbs, Math.max(Math.abs(path[0][j]), Math.abs(path[1][j])));
+        }
+        double s = (Math.min(w, h) / 2 - 20) / maxAbs;
+
+        g.setStroke(ACCENT);
+        g.setLineWidth(1.5);
+        g.beginPath();
+        for (int j = 0; j < path[0].length; j++) {
+            double x = cx + path[0][j] * s;
+            double y = cy - path[1][j] * s;
+            if (j == 0) {
+                g.moveTo(x, y);
+            } else {
+                g.lineTo(x, y);
+            }
+        }
+        g.stroke();
+    }
+
+    private void startPathLoop() {
+        AnimationTimer timer = new AnimationTimer() {
+            @Override
+            public void handle(long now) {
+                drawPathStudio();
+            }
+        };
+        timer.start();
+    }
+
+    private void drawPathStudio() {
+        GraphicsContext g = studioAnimCanvas.getGraphicsContext2D();
+        double w = studioAnimCanvas.getWidth();
+        double h = studioAnimCanvas.getHeight();
+        double cx = w / 2;
+        double cy = h / 2;
+        clear(g, w, h);
+
+        java.util.List<Epicycle> eps = epicycles;
+        if (eps.isEmpty()) {
+            return;
+        }
+
+        if (targetPath != null) {
+            g.setStroke(GRID);
+            g.setLineWidth(1);
+            g.beginPath();
+            for (int j = 0; j < targetPath[0].length; j++) {
+                double x = cx + targetPath[0][j] * pathScale;
+                double y = cy - targetPath[1][j] * pathScale;
+                if (j == 0) {
+                    g.moveTo(x, y);
+                } else {
+                    g.lineTo(x, y);
+                }
+            }
+            g.stroke();
+        }
+
+        int m = (int) epicycleSlider.getValue();
+        double x = cx;
+        double y = cy;
+        for (int i = 0; i < m && i < eps.size(); i++) {
+            Epicycle e = eps.get(i);
+            double prevX = x;
+            double prevY = y;
+            double r = e.amplitude() * pathScale;
+
+            if (r > 0.8) {
+                g.setStroke(EPI_CIRCLE);
+                g.setLineWidth(1);
+                g.strokeOval(prevX - r, prevY - r, 2 * r, 2 * r);
+            }
+            x += e.xAt(animT) * pathScale;
+            y -= e.yAt(animT) * pathScale;
+            g.setStroke(ACCENT);
+            g.setLineWidth(1.2);
+            g.strokeLine(prevX, prevY, x, y);
+        }
+
+        trail.addLast(new double[] {x, y});
+        while (trail.size() > (int) (1.0 / PATH_DT) + 2) {
+            trail.removeFirst();
+        }
+
+        if (trail.size() > 1) {
+            g.setStroke(AMBER);
+            g.setLineWidth(2.5);
+            g.beginPath();
+            boolean first = true;
+            for (double[] p : trail) {
+                if (first) {
+                    g.moveTo(p[0], p[1]);
+                    first = false;
+                } else {
+                    g.lineTo(p[0], p[1]);
+                }
+            }
+            g.stroke();
+        }
+
+        g.setFill(AMBER);
+        g.fillOval(x - 4, y - 4, 8, 8);
+
+        animT += PATH_DT;
+        if (animT >= 1.0) {
+            animT -= 1.0;
+            trail.clear();
+        }
     }
 
     @Override

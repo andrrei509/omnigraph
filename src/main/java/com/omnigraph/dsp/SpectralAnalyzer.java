@@ -15,6 +15,13 @@ public interface SpectralAnalyzer {
      */
     double[] magnitude(double[] samples);
 
+    /**
+     * In-place forward complex FFT of length {@code re.length} (a power of two).
+     * On return the arrays hold {@code X[k] = sum x[n] exp(-2*PI*i*k*n/N)}. This
+     * preserves phase, which the epicycle decomposition needs.
+     */
+    void forwardTransform(double[] re, double[] im);
+
     /** Short identifier of the backend in use (for display/diagnostics). */
     String backend();
 }
