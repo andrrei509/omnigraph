@@ -7,6 +7,8 @@ import com.omnigraph.core.RenderBridge;
 import com.omnigraph.core.SimulationConstants;
 import com.omnigraph.core.SimulationObserver;
 import com.omnigraph.core.SimulationState;
+import com.omnigraph.dsp.SpectralAnalyzer;
+import com.omnigraph.dsp.SpectralAnalyzers;
 import com.omnigraph.model.HarmonicSnapshot;
 import com.omnigraph.model.WaveformType;
 import com.omnigraph.persistence.DatabaseLogger;
@@ -84,6 +86,7 @@ public final class OmniGraphDashboard extends Application implements SimulationO
     private RenderBridge bridge;
     private MathCoreEngine engine;
     private AudioEngine audio;
+    private String analyzerBackend = "java";
 
     private Canvas circleCanvas;
     private Canvas waveCanvas;
@@ -103,9 +106,11 @@ public final class OmniGraphDashboard extends Application implements SimulationO
 
     @Override
     public void start(Stage stage) {
+        SpectralAnalyzer analyzer = SpectralAnalyzers.best();
+        this.analyzerBackend = analyzer.backend();
         this.state = new SimulationState();
         this.bridge = new RenderBridge(state);
-        this.engine = new MathCoreEngine(constants, params, state);
+        this.engine = new MathCoreEngine(constants, params, state, analyzer);
         this.audio = new AudioEngine(params);
 
         root = new BorderPane();
@@ -159,7 +164,7 @@ public final class OmniGraphDashboard extends Application implements SimulationO
         grid.add(panel("View A — Dynamic Geometry (Unit Circle)", circleCanvas), 0, 0);
         grid.add(panel("View B — The Harmonic Plane (Sine Trace)", waveCanvas), 1, 0);
         grid.add(panel("View C — Spectral Synthesis (Fourier Epicycles)", fourierCanvas), 0, 1, 2, 1);
-        grid.add(panel("View D — Harmonic Spectrum", spectrumCanvas), 0, 2, 2, 1);
+        grid.add(panel("View D — Measured Spectrum (FFT) vs Theoretical", spectrumCanvas), 0, 2, 2, 1);
 
         return grid;
     }
@@ -513,40 +518,61 @@ public final class OmniGraphDashboard extends Application implements SimulationO
         g.setLineWidth(1);
         g.strokeLine(0, baseY, w, baseY);
 
-        if (frame == null || frame.spectrumSize() == 0) {
+        if (frame == null || frame.measuredBins() == 0) {
             return;
         }
 
-        double maxAmp = 0.0;
+        int highestHarmonic = 1;
         for (int i = 0; i < frame.spectrumSize(); i++) {
-            maxAmp = Math.max(maxAmp, frame.spectrumAmplitude(i));
+            highestHarmonic = Math.max(highestHarmonic, frame.harmonicNumber(i));
+        }
+        int displayBins = Math.min(frame.measuredBins() - 1, highestHarmonic + 2);
+
+        double[] theoretical = new double[frame.measuredBins()];
+        for (int i = 0; i < frame.spectrumSize(); i++) {
+            int k = frame.harmonicNumber(i);
+            if (k < theoretical.length) {
+                theoretical[k] = frame.spectrumAmplitude(i);
+            }
+        }
+
+        double maxAmp = 0.0;
+        for (int b = 1; b <= displayBins; b++) {
+            maxAmp = Math.max(maxAmp, Math.max(frame.measuredAmplitude(b), theoretical[b]));
         }
         if (maxAmp <= 0.0) {
             return;
         }
 
-        int n = frame.spectrumSize();
-        double slot = w / n;
-        double barWidth = Math.min(slot * 0.6, 28);
-        double maxBarHeight = baseY - 16;
+        double slot = w / (displayBins + 1.0);
+        double barWidth = Math.min(slot * 0.55, 26);
+        double maxBarHeight = baseY - 18;
 
         g.setFont(Font.font("System", 10));
-        for (int i = 0; i < n; i++) {
-            double amp = frame.spectrumAmplitude(i);
-            double barHeight = (amp / maxAmp) * maxBarHeight;
-            double x = (i * slot) + (slot - barWidth) / 2.0;
+        for (int b = 1; b <= displayBins; b++) {
+            double measured = frame.measuredAmplitude(b);
+            double barHeight = (measured / maxAmp) * maxBarHeight;
+            double x = (b * slot) + (slot - barWidth) / 2.0;
             double y = baseY - barHeight;
 
-            g.setFill(i == 0 ? AMBER : ACCENT);
+            g.setFill(b == 1 ? AMBER : ACCENT);
             g.fillRect(x, y, barWidth, barHeight);
 
+            // theoretical reference marker for the same harmonic
+            double tHeight = (theoretical[b] / maxAmp) * maxBarHeight;
+            double tY = baseY - tHeight;
+            g.setStroke(MAGENTA);
+            g.setLineWidth(2);
+            g.strokeLine(x - 2, tY, x + barWidth + 2, tY);
+
             g.setFill(MUTED);
-            g.fillText("k" + frame.harmonicNumber(i), x, baseY + 16);
+            g.fillText("k" + b, x, baseY + 16);
         }
 
         g.setFill(TEXT);
         g.setFont(Font.font("System", FontWeight.SEMI_BOLD, 12));
-        g.fillText(frame.waveformName() + "  •  " + n + " harmonics", 8, 16);
+        g.fillText(frame.waveformName() + "  •  bars = FFT (" + analyzerBackend
+                + ")  •  lines = theoretical", 8, 16);
     }
 
     private void drawScrollingTrace(GraphicsContext g, Deque<Double> history,

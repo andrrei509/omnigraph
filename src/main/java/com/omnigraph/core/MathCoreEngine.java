@@ -1,5 +1,7 @@
 package com.omnigraph.core;
 
+import com.omnigraph.dsp.JavaSpectralAnalyzer;
+import com.omnigraph.dsp.SpectralAnalyzer;
 import com.omnigraph.model.HarmonicSnapshot;
 import com.omnigraph.model.Spectrum;
 import com.omnigraph.model.WaveformType;
@@ -17,11 +19,18 @@ import com.omnigraph.model.WaveformType;
  */
 public final class MathCoreEngine extends Thread {
 
+    /** FFT window length used for live spectral analysis (power of two). */
+    private static final int ANALYSIS_N = 256;
+    /** Number of measured harmonic bins exposed to the UI. */
+    private static final int ANALYSIS_BINS = 40;
+
     private final EngineParameters params;
     private final SimulationState state;
+    private final SpectralAnalyzer analyzer;
 
     private final int samplesPerPeriod;
     private final long tickNanos;
+    private final double[] analysisBuffer = new double[ANALYSIS_N];
 
     private volatile boolean running = true;
 
@@ -33,12 +42,22 @@ public final class MathCoreEngine extends Thread {
     private double simulationTime = 0.0;
 
     public MathCoreEngine(SimulationConstants constants, EngineParameters params, SimulationState state) {
+        this(constants, params, state, new JavaSpectralAnalyzer());
+    }
+
+    public MathCoreEngine(SimulationConstants constants, EngineParameters params,
+                          SimulationState state, SpectralAnalyzer analyzer) {
         super("OmniGraph-MathSimulationThread");
         setDaemon(true);
         this.params = params;
         this.state = state;
+        this.analyzer = analyzer;
         this.samplesPerPeriod = constants.samplesPerPeriod;
         this.tickNanos = 1_000_000_000L / constants.ticksPerSecond;
+    }
+
+    public String analyzerBackend() {
+        return analyzer.backend();
     }
 
     @Override
@@ -104,8 +123,43 @@ public final class MathCoreEngine extends Thread {
         }
 
         double fourierValue = (n > 0) ? epY[n - 1] : 0.0;
+        double[] measuredSpectrum = analyzeSpectrum(spectrum);
+
         return new HarmonicSnapshot(sequence, simulationTime, amplitude, theta, primaryX, primaryY,
-                epX, epY, fourierValue, harmonicNumber, spectrumAmplitude, waveform.displayName());
+                epX, epY, fourierValue, harmonicNumber, spectrumAmplitude, measuredSpectrum,
+                waveform.displayName());
+    }
+
+    /**
+     * Renders the current waveform over one fundamental period, runs it through
+     * the FFT, and returns the measured per-harmonic amplitudes. Bin {@code k}
+     * corresponds exactly to harmonic {@code k} because the window spans one
+     * period. This is genuine spectral measurement, not a replay of the input
+     * coefficients, so it both demonstrates the time/frequency duality and
+     * exercises the native kernel in the live path.
+     */
+    private double[] analyzeSpectrum(Spectrum spectrum) {
+        int components = spectrum.size();
+        int[] k = spectrum.harmonicNumber();
+        double[] weight = spectrum.weight();
+
+        for (int j = 0; j < ANALYSIS_N; j++) {
+            double phi = (2.0 * Math.PI * j) / ANALYSIS_N;
+            double sample = 0.0;
+            for (int i = 0; i < components; i++) {
+                sample += weight[i] * Math.sin(k[i] * phi);
+            }
+            analysisBuffer[j] = sample;
+        }
+
+        double[] magnitude = analyzer.magnitude(analysisBuffer);
+        int bins = Math.min(ANALYSIS_BINS, magnitude.length);
+        double[] measured = new double[bins];
+        double scale = 2.0 / ANALYSIS_N;
+        for (int b = 0; b < bins; b++) {
+            measured[b] = magnitude[b] * scale;
+        }
+        return measured;
     }
 
     private void awaitResume() {

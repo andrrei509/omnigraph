@@ -10,7 +10,9 @@ synchronized, live-updating views you can retune — and hear — as it runs.
   into the time domain, building a sine wave as the vector spins.
 - **View C — Spectral Synthesis:** a Fourier epicycle chain that sums harmonics
   into the selected synthesized signal.
-- **View D — Harmonic Spectrum:** a live bar chart of each harmonic's amplitude.
+- **View D — Measured Spectrum:** a live **FFT** of the synthesized signal,
+  shown as bars, with the theoretical harmonic weights overlaid as reference
+  lines — a real time/frequency-domain cross-check, not a replay of the inputs.
 
 ## Live laboratory
 
@@ -57,6 +59,28 @@ audio layers never perform a single math operation.
 - **`OmniGraphDashboard`** is a pure `SimulationObserver`. It buffers values for
   the scrolling traces and paints all four views with an `AnimationTimer`.
 
+## Polyglot performance: native DSP kernel
+
+The spectral analysis (View D) runs through a `SpectralAnalyzer` abstraction with
+two interchangeable backends:
+
+- **Native C kernel** (`native/omnigraph_dsp.c`) — a radix-2 Cooley-Tukey FFT
+  exposed to the JVM via **JNI**, compiled to `libomnigraph_dsp`.
+- **Pure-Java fallback** (`JavaSpectralAnalyzer`) — the identical algorithm in
+  Java, used automatically when the native library isn't on
+  `java.library.path`.
+
+`SpectralAnalyzers.best()` picks the native backend when available. The two are
+numerically identical (agreement to ~1e-29), which the test suite enforces with
+a cross-check that runs whenever the native library is present. This gives the
+performance and polyglot-systems credibility of a native kernel **without**
+sacrificing portability — the app behaves identically with or without it.
+
+```bash
+make -C native        # build the native library, or:
+mvn -Pnative compile  # build it as part of the Maven build
+```
+
 ## Calibration constants
 
 The engine initializes with `A = 12`, `B = -2`, `T = 5 * 10^-4`:
@@ -89,9 +113,13 @@ quoted literal. The same escaping path is used when appending to the on-disk
 Requires JDK 21+ and Maven.
 
 ```bash
-mvn test          # 9 unit tests: waveform math + SQL rules (date format, injection safety)
-mvn javafx:run    # launch the dashboard
+make -C native              # (optional) build the native FFT kernel
+mvn test                    # 12 unit tests: waveform math, FFT, SQL rules
+mvn javafx:run              # launch the dashboard
 ```
+
+The Maven build is configured with `-Djava.library.path=native`, so a library
+built into `native/` is picked up automatically by both the tests and the app.
 
 ## Layout
 
@@ -111,11 +139,19 @@ src/main/java/com/omnigraph
 │   └── HarmonicSnapshot.java       immutable per-frame payload
 ├── audio
 │   └── AudioEngine.java            real-time additive PCM synthesis thread
+├── dsp
+│   ├── SpectralAnalyzer.java       FFT backend contract
+│   ├── JavaSpectralAnalyzer.java   pure-Java radix-2 FFT (fallback)
+│   ├── NativeSpectralAnalyzer.java JNI binding to the C kernel
+│   └── SpectralAnalyzers.java      backend selector (native, else java)
 ├── persistence
 │   ├── SimulationRecord.java       typed saved-state value object
 │   └── DatabaseLogger.java         safe raw-SQL payload generator + script export
 └── ui
     └── OmniGraphDashboard.java     dark-themed Views A–D + live controls + export
 
-src/test/java/com/omnigraph        WaveformType / DatabaseLogger / MathCoreEngine tests
+src/test/java/com/omnigraph        WaveformType / DatabaseLogger / MathCoreEngine / SpectralAnalyzer tests
+native
+├── omnigraph_dsp.c                 radix-2 FFT kernel (C)
+└── Makefile                        cross-platform shared-library build
 ```

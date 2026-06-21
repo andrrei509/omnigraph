@@ -24,6 +24,7 @@ public final class HarmonicSnapshot {
 
     private final int[] harmonicNumber;
     private final double[] spectrumAmplitude;
+    private final double[] measuredSpectrum;
     private final String waveformName;
 
     public HarmonicSnapshot(long sequence,
@@ -37,6 +38,7 @@ public final class HarmonicSnapshot {
                             double fourierValue,
                             int[] harmonicNumber,
                             double[] spectrumAmplitude,
+                            double[] measuredSpectrum,
                             String waveformName) {
         if (epicycleX.length != epicycleY.length) {
             throw new IllegalArgumentException("epicycle coordinate arrays must be equal length");
@@ -55,6 +57,7 @@ public final class HarmonicSnapshot {
         this.fourierValue = fourierValue;
         this.harmonicNumber = harmonicNumber;
         this.spectrumAmplitude = spectrumAmplitude;
+        this.measuredSpectrum = measuredSpectrum;
         this.waveformName = waveformName;
     }
 
@@ -109,9 +112,19 @@ public final class HarmonicSnapshot {
         return harmonicNumber[i];
     }
 
-    /** Absolute amplitude of spectrum bin i (View D). */
+    /** Theoretical absolute amplitude of harmonic bin i (View D). */
     public double spectrumAmplitude(int i) {
         return spectrumAmplitude[i];
+    }
+
+    /** Number of FFT-measured amplitude bins, indexed by harmonic number. */
+    public int measuredBins() {
+        return measuredSpectrum.length;
+    }
+
+    /** FFT-measured amplitude at bin {@code i} (i == harmonic number). */
+    public double measuredAmplitude(int i) {
+        return measuredSpectrum[i];
     }
 
     public String waveformName() {
