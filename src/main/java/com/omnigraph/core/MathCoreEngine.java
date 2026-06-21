@@ -1,24 +1,26 @@
 package com.omnigraph.core;
 
 import com.omnigraph.model.HarmonicSnapshot;
+import com.omnigraph.model.Spectrum;
+import com.omnigraph.model.WaveformType;
 
 /**
  * Dedicated background thread that owns the simulation clock and performs every
  * trigonometric / geometric computation in the system.
  *
  * <p>The rendering layer never calls into this class for math; it only consumes
- * the frames this thread publishes into {@link SimulationState}. The thread
- * paces itself against wall-clock time so the visual animation runs at a steady
- * rate regardless of how fast the CPU can compute frames.
+ * the frames this thread publishes into {@link SimulationState}. All tuning is
+ * read live from a shared {@link EngineParameters}, so the UI can retune the
+ * running simulation without restarting it. Phase is accumulated incrementally
+ * rather than recomputed from {@code t}, so changing the frequency factor mid
+ * run never causes a visual discontinuity.
  */
 public final class MathCoreEngine extends Thread {
 
-    private final SimulationConstants constants;
+    private final EngineParameters params;
     private final SimulationState state;
 
-    private final double[] harmonicWeight;
-    private final double angularVelocity;
-    private final double timeStep;
+    private final int samplesPerPeriod;
     private final long tickNanos;
 
     private volatile boolean running = true;
@@ -27,17 +29,16 @@ public final class MathCoreEngine extends Thread {
     private volatile boolean paused = false;
 
     private long sequence = 0L;
+    private double theta = 0.0;
     private double simulationTime = 0.0;
 
-    public MathCoreEngine(SimulationConstants constants, SimulationState state) {
+    public MathCoreEngine(SimulationConstants constants, EngineParameters params, SimulationState state) {
         super("OmniGraph-MathSimulationThread");
         setDaemon(true);
-        this.constants = constants;
+        this.params = params;
         this.state = state;
-        this.angularVelocity = constants.frequencyFactor * constants.baseAngularFrequency();
-        this.timeStep = constants.timeStep();
+        this.samplesPerPeriod = constants.samplesPerPeriod;
         this.tickNanos = 1_000_000_000L / constants.ticksPerSecond;
-        this.harmonicWeight = buildSquareWaveWeights(constants.fourierHarmonics, constants.amplitude);
     }
 
     @Override
@@ -52,7 +53,10 @@ public final class MathCoreEngine extends Thread {
             HarmonicSnapshot frame = computeFrame();
             state.publish(frame);
 
-            simulationTime += timeStep;
+            double speed = params.getSpeed();
+            double dTheta = params.getFrequencyFactor() * (2.0 * Math.PI / samplesPerPeriod) * speed;
+            theta += dTheta;
+            simulationTime += (params.getPeriod() / samplesPerPeriod) * speed;
             sequence++;
 
             nextTickAt += tickNanos;
@@ -65,50 +69,43 @@ public final class MathCoreEngine extends Thread {
                     break;
                 }
             } else {
-                // Fell behind schedule; resync rather than spiral.
                 nextTickAt = System.nanoTime();
             }
         }
     }
 
     private HarmonicSnapshot computeFrame() {
-        double theta = angularVelocity * simulationTime;
-        double primaryX = constants.amplitude * Math.cos(theta);
-        double primaryY = constants.amplitude * Math.sin(theta);
+        double amplitude = params.getAmplitude();
+        WaveformType waveform = params.getWaveform();
 
-        int n = harmonicWeight.length;
+        double primaryX = amplitude * Math.cos(theta);
+        double primaryY = amplitude * Math.sin(theta);
+
+        Spectrum spectrum = waveform.build(params.getHarmonics(), amplitude);
+        int n = spectrum.size();
+
         double[] epX = new double[n];
         double[] epY = new double[n];
+        int[] harmonicNumber = new int[n];
+        double[] spectrumAmplitude = new double[n];
 
         double cumulativeX = 0.0;
         double cumulativeY = 0.0;
         for (int i = 0; i < n; i++) {
-            int k = (2 * i) + 1;
+            int k = spectrum.harmonicNumber()[i];
+            double weight = spectrum.weight()[i];
             double harmonicAngle = theta * k;
-            cumulativeX += harmonicWeight[i] * Math.cos(harmonicAngle);
-            cumulativeY += harmonicWeight[i] * Math.sin(harmonicAngle);
+            cumulativeX += weight * Math.cos(harmonicAngle);
+            cumulativeY += weight * Math.sin(harmonicAngle);
             epX[i] = cumulativeX;
             epY[i] = cumulativeY;
+            harmonicNumber[i] = k;
+            spectrumAmplitude[i] = Math.abs(weight);
         }
 
         double fourierValue = (n > 0) ? epY[n - 1] : 0.0;
-        return new HarmonicSnapshot(sequence, simulationTime, theta, primaryX, primaryY,
-                epX, epY, fourierValue);
-    }
-
-    /**
-     * Fourier coefficients for a square wave: only odd harmonics, each with
-     * amplitude {@code (4A/PI) / k}. Precomputed once since they never change
-     * for a fixed calibration.
-     */
-    private static double[] buildSquareWaveWeights(int harmonics, double amplitude) {
-        double[] weights = new double[harmonics];
-        double scale = (4.0 * amplitude) / Math.PI;
-        for (int i = 0; i < harmonics; i++) {
-            int k = (2 * i) + 1;
-            weights[i] = scale / k;
-        }
-        return weights;
+        return new HarmonicSnapshot(sequence, simulationTime, amplitude, theta, primaryX, primaryY,
+                epX, epY, fourierValue, harmonicNumber, spectrumAmplitude, waveform.displayName());
     }
 
     private void awaitResume() {
@@ -139,7 +136,6 @@ public final class MathCoreEngine extends Thread {
         return paused;
     }
 
-    /** Requests a clean shutdown of the simulation thread. */
     public void shutdown() {
         running = false;
         resumeSimulation();
