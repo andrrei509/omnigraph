@@ -129,18 +129,89 @@ query. A label such as `rob'); DROP TABLE x;--` is emitted as a single inert
 quoted literal. The same escaping path is used when appending to the on-disk
 `.sql` script.
 
-## Build, test, run
+## Getting started
 
-Requires JDK 21+ and Maven.
+### 1. Prerequisites
+
+| Tool | Version | Required? | Notes |
+|------|---------|-----------|-------|
+| JDK  | 21+     | Yes       | `java -version` should report 21 or newer. |
+| Maven| 3.8+    | Yes       | `mvn -version`. Downloads JavaFX automatically on first build. |
+| A C compiler (`cc`/`gcc`/`clang`) + `make` | any recent | Optional | Only needed to build the native FFT kernel. Without it the app uses the pure-Java FFT. |
+| A graphical desktop | — | To run the app | JavaFX needs a display. Tests run headless. |
+
+JavaFX itself is **not** a separate install — it is pulled in as a Maven
+dependency the first time you build (so the first build needs internet access).
+
+### 2. Get the code
 
 ```bash
-make -C native              # (optional) build the native FFT kernel
-mvn test                    # 20 unit tests: waveform math, FFT, DFT/epicycles, parser, SQL rules
-mvn javafx:run              # launch the dashboard
+git clone <your-fork-url> omnigraph
+cd omnigraph
+git checkout claude/omnigraph-harmonic-mvp-322stb
 ```
 
-The Maven build is configured with `-Djava.library.path=native`, so a library
-built into `native/` is picked up automatically by both the tests and the app.
+### 3. (Optional) Build the native FFT kernel
+
+Skip this and the app still works on the pure-Java FFT. To enable the
+C-accelerated path:
+
+```bash
+make -C native          # produces native/libomnigraph_dsp.{so,dylib}
+# — or build it as part of Maven —
+mvn -Pnative compile
+```
+
+Requires `JAVA_HOME` to point at your JDK (used to find `<jni.h>`). On most
+systems it is already set; if not:
+
+```bash
+export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which javac))))
+```
+
+### 4. Run the tests (verifies your setup, no display needed)
+
+```bash
+mvn test
+```
+
+Expect `Tests run: 20, Failures: 0`. If you built the native library, the
+native-vs-Java FFT cross-checks run too; otherwise they are skipped.
+
+### 5. Launch the app
+
+```bash
+mvn javafx:run
+```
+
+The Maven build passes `-Djava.library.path=native` automatically, so a native
+library compiled into `native/` is picked up by both the tests and the app — no
+extra flags needed. To confirm which FFT backend is active, look at the label in
+**View D** / the **Path Studio** header: it reads `native-c` or `java`.
+
+### 6. Using the app
+
+- **Harmonic Lab tab** — pick a target waveform and drag the sliders
+  (amplitude, frequency factor, harmonics, speed) to retune the live
+  simulation. Click **Enable Audio** to hear the spectrum, **Save Waveform →
+  SQL** to append a row to `omnigraph_waveforms.sql`, or **Export PNG** to save
+  a screenshot.
+- **Path Studio tab** — type a function such as `sin(3*x) + 0.5*cos(5*x)` and
+  press **Plot f(x)**, *or* draw a closed shape with the mouse on the left
+  canvas and press **Decompose Drawing**. Watch the epicycles retrace it on the
+  right, and drag the **Epicycles** slider to see the series converge.
+
+### Troubleshooting
+
+- **`Error: JavaFX runtime components are missing`** — launch with
+  `mvn javafx:run` (not a bare `java -jar`); the plugin wires the JavaFX module
+  path for you.
+- **No window appears / `Unable to open DISPLAY`** — you are on a headless host.
+  The GUI needs a desktop session; the test suite, however, runs anywhere.
+- **`make` can't find `jni.h`** — set `JAVA_HOME` as shown in step 3.
+- **View D shows `java`, not `native-c`** — the native library wasn't found;
+  rebuild it (step 3). This is not an error: the app is fully functional on the
+  Java FFT.
 
 ## Layout
 
