@@ -4,3 +4,8 @@ target/
 *.iml
 .vscode/
 .DS_Store
+omnigraph_waveforms.sql
+omnigraph-*.png
+native/*.so
+native/*.dylib
+native/*.dll

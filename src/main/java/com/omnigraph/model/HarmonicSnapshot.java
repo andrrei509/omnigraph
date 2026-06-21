@@ -13,6 +13,7 @@ public final class HarmonicSnapshot {
     private final long sequence;
     private final double simulationTime;
 
+    private final double amplitude;
     private final double primaryAngle;
     private final double primaryX;
     private final double primaryY;
@@ -21,63 +22,78 @@ public final class HarmonicSnapshot {
     private final double[] epicycleY;
     private final double fourierValue;
 
+    private final int[] harmonicNumber;
+    private final double[] spectrumAmplitude;
+    private final double[] measuredSpectrum;
+    private final String waveformName;
+
     public HarmonicSnapshot(long sequence,
                             double simulationTime,
+                            double amplitude,
                             double primaryAngle,
                             double primaryX,
                             double primaryY,
                             double[] epicycleX,
                             double[] epicycleY,
-                            double fourierValue) {
+                            double fourierValue,
+                            int[] harmonicNumber,
+                            double[] spectrumAmplitude,
+                            double[] measuredSpectrum,
+                            String waveformName) {
         if (epicycleX.length != epicycleY.length) {
             throw new IllegalArgumentException("epicycle coordinate arrays must be equal length");
         }
+        if (harmonicNumber.length != spectrumAmplitude.length) {
+            throw new IllegalArgumentException("spectrum arrays must be equal length");
+        }
         this.sequence = sequence;
         this.simulationTime = simulationTime;
+        this.amplitude = amplitude;
         this.primaryAngle = primaryAngle;
         this.primaryX = primaryX;
         this.primaryY = primaryY;
         this.epicycleX = epicycleX;
         this.epicycleY = epicycleY;
         this.fourierValue = fourierValue;
+        this.harmonicNumber = harmonicNumber;
+        this.spectrumAmplitude = spectrumAmplitude;
+        this.measuredSpectrum = measuredSpectrum;
+        this.waveformName = waveformName;
     }
 
-    /** Monotonically increasing frame id. */
     public long sequence() {
         return sequence;
     }
 
-    /** Simulation time of this frame in seconds. */
     public double simulationTime() {
         return simulationTime;
     }
 
-    /** Primary phasor angle in radians (View A). */
+    /** Amplitude in effect for this frame (View A radius scale). */
+    public double amplitude() {
+        return amplitude;
+    }
+
     public double primaryAngle() {
         return primaryAngle;
     }
 
-    /** Horizontal projection of the primary phasor, amplitude-scaled (View A). */
     public double primaryX() {
         return primaryX;
     }
 
-    /** Vertical projection of the primary phasor, amplitude-scaled (Views A and B). */
     public double primaryY() {
         return primaryY;
     }
 
-    /** Number of epicycle tips in the Fourier chain (View C). */
     public int epicycleCount() {
         return epicycleX.length;
     }
 
-    /** Cumulative x of the chain tip after the i-th harmonic vector (View C). */
     public double epicycleX(int i) {
         return epicycleX[i];
     }
 
-    /** Cumulative y of the chain tip after the i-th harmonic vector (View C). */
     public double epicycleY(int i) {
         return epicycleY[i];
     }
@@ -85,5 +101,33 @@ public final class HarmonicSnapshot {
     /** Synthesized signal value: vertical position of the final chain tip (View C). */
     public double fourierValue() {
         return fourierValue;
+    }
+
+    public int spectrumSize() {
+        return harmonicNumber.length;
+    }
+
+    /** Harmonic index k of spectrum bin i (View D). */
+    public int harmonicNumber(int i) {
+        return harmonicNumber[i];
+    }
+
+    /** Theoretical absolute amplitude of harmonic bin i (View D). */
+    public double spectrumAmplitude(int i) {
+        return spectrumAmplitude[i];
+    }
+
+    /** Number of FFT-measured amplitude bins, indexed by harmonic number. */
+    public int measuredBins() {
+        return measuredSpectrum.length;
+    }
+
+    /** FFT-measured amplitude at bin {@code i} (i == harmonic number). */
+    public double measuredAmplitude(int i) {
+        return measuredSpectrum[i];
+    }
+
+    public String waveformName() {
+        return waveformName;
     }
 }

@@ -1,5 +1,11 @@
 package com.omnigraph.persistence;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDate;
 
 /**
@@ -85,6 +91,32 @@ public final class DatabaseLogger {
                     + " :: " + sql);
         }
         return sql;
+    }
+
+    /**
+     * Appends an INSERT for the given record to a {@code .sql} script file,
+     * creating the file with the schema DDL as a header the first time. Returns
+     * the line that was written. All values flow through the same escaping path
+     * as {@link #buildInsert}, so the on-disk script is injection-safe too.
+     */
+    public String appendToScript(Path scriptPath, SimulationRecord record) {
+        String insert = buildInsert(record);
+        try {
+            boolean fresh = !Files.exists(scriptPath);
+            if (scriptPath.getParent() != null) {
+                Files.createDirectories(scriptPath.getParent());
+            }
+            StringBuilder payload = new StringBuilder();
+            if (fresh) {
+                payload.append(generateSchema()).append(System.lineSeparator());
+            }
+            payload.append(insert).append(System.lineSeparator());
+            Files.writeString(scriptPath, payload.toString(), StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException e) {
+            throw new UncheckedIOException("failed to append to SQL script: " + scriptPath, e);
+        }
+        return insert;
     }
 
     /**
